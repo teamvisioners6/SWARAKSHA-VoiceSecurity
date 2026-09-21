@@ -1,0 +1,2342 @@
+package com.vigilvoice.mobile.calling.ui
+
+import android.util.Log
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.vigilvoice.mobile.RetrofitClient
+import com.vigilvoice.mobile.calling.analysis.LiveVoiceAnalyzer
+import com.vigilvoice.mobile.calling.webrtc.SignalingClient
+import com.vigilvoice.mobile.calling.webrtc.WebRTCManager
+import org.json.JSONObject
+import org.webrtc.IceCandidate
+import org.webrtc.PeerConnection
+import org.webrtc.SessionDescription
+
+private const val TAG = "SWARAKSHA-CallScreen"
+
+private const val CALLER = "CALLER"
+private const val RECEIVER = "RECEIVER"
+
+@Composable
+fun CallScreen(
+    roomId: String,
+    peerId: String,
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+
+    // =========================================================
+    // SIGNALING HOLDER
+    //
+    // Declared BEFORE WebRTCManager because the WebRTC callbacks
+    // need to access the signaling client.
+    // =========================================================
+
+    val signalingClientHolder =
+        remember {
+            mutableStateOf<SignalingClient?>(null)
+        }
+
+    // =========================================================
+    // CALL STATE
+    // =========================================================
+
+    var callRole by remember {
+        mutableStateOf<String?>(null)
+    }
+
+    var remotePeerId by remember {
+        mutableStateOf<String?>(null)
+    }
+
+    var callConnected by remember {
+        mutableStateOf(false)
+    }
+
+    var calling by remember {
+        mutableStateOf(false)
+    }
+
+    var muted by remember {
+        mutableStateOf(false)
+    }
+
+    var speakerOn by remember {
+        mutableStateOf(true)
+    }
+
+    var remoteAudioAvailable by remember {
+        mutableStateOf(false)
+    }
+
+    var monitoring by remember {
+        mutableStateOf(false)
+    }
+
+    var signalingConnected by remember {
+        mutableStateOf(false)
+    }
+
+    // =========================================================
+    // AI STATE
+    //
+    // null = no analysis result yet
+    // value = latest analyzed risk
+    // =========================================================
+
+    var liveRisk by remember {
+        mutableStateOf<Double?>(null)
+    }
+
+    var liveVerdict by remember {
+        mutableStateOf("WAITING")
+    }
+
+    var livePrediction by remember {
+        mutableStateOf("WAITING")
+    }
+
+    var analyzing by remember {
+        mutableStateOf(false)
+    }
+
+    var errorMessage by remember {
+        mutableStateOf<String?>(null)
+    }
+
+    // =========================================================
+    // LIVE VOICE ANALYZER
+    // =========================================================
+
+    val liveVoiceAnalyzer =
+        remember {
+
+            LiveVoiceAnalyzer(
+
+                context = context,
+
+                analyzeApi = { filePart ->
+
+                    RetrofitClient.api.analyzeVoice(
+                        filePart
+                    )
+                },
+
+                listener =
+                    object :
+                        LiveVoiceAnalyzer.Listener {
+
+                        override fun onAnalyzing() {
+
+                            analyzing = true
+
+                            Log.d(
+                                TAG,
+                                "LIVE AI ANALYSIS STARTED"
+                            )
+                        }
+
+                        override fun onResult(
+                            verdict: String,
+                            riskScore: Double,
+                            prediction: String
+                        ) {
+
+                            analyzing = false
+
+                            liveRisk =
+                                riskScore.coerceIn(
+                                    0.0,
+                                    100.0
+                                )
+
+                            liveVerdict =
+                                when {
+
+                                    riskScore >= 70.0 ->
+                                        "AI SPOOF"
+
+                                    riskScore >= 40.0 ->
+                                        "SUSPICIOUS"
+
+                                    else ->
+                                        "REAL"
+                                }
+
+                            livePrediction =
+                                prediction
+
+                            Log.d(
+                                TAG,
+                                "LIVE RESULT: " +
+                                    "risk=$riskScore " +
+                                    "verdict=$verdict " +
+                                    "prediction=$prediction"
+                            )
+                        }
+
+                        override fun onError(
+                            error: String
+                        ) {
+
+                            analyzing = false
+
+                            Log.e(
+                                TAG,
+                                "LIVE ANALYZER ERROR: $error"
+                            )
+
+                            errorMessage =
+                                error
+                        }
+                    }
+            )
+        }
+
+    // =========================================================
+    // WEBRTC MANAGER
+    // =========================================================
+
+    val webRTCManager =
+        remember {
+
+            WebRTCManager(
+
+                context = context,
+
+                listener =
+                    object :
+                        WebRTCManager.Listener {
+
+                        override fun onIceCandidate(
+                            candidate: IceCandidate
+                        ) {
+
+                            val target =
+                                remotePeerId
+
+                            if (
+                                target.isNullOrBlank()
+                            ) {
+
+                                Log.w(
+                                    TAG,
+                                    "ICE generated but remote peer is unknown"
+                                )
+
+                                return
+                            }
+
+                            signalingClientHolder
+                                .value
+                                ?.sendIceCandidate(
+
+                                    targetPeerId =
+                                        target,
+
+                                    candidate =
+                                        candidate.sdp,
+
+                                    sdpMid =
+                                        candidate.sdpMid,
+
+                                    sdpMLineIndex =
+                                        candidate.sdpMLineIndex
+                                )
+                        }
+
+                        override fun onConnectionStateChanged(
+                            state:
+                                PeerConnection.PeerConnectionState
+                        ) {
+
+                            Log.d(
+                                TAG,
+                                "WEBRTC CONNECTION STATE = $state"
+                            )
+
+                            when (state) {
+
+                                PeerConnection
+                                    .PeerConnectionState
+                                    .CONNECTED -> {
+
+                                    callConnected =
+                                        true
+
+                                    calling =
+                                        false
+
+                                    Log.d(
+                                        TAG,
+                                        "CALL CONNECTED"
+                                    )
+
+                                    /*
+                                     * ONLY RECEIVER monitors
+                                     * the remote caller.
+                                     */
+                                    if (
+                                        callRole ==
+                                        RECEIVER
+                                    ) {
+
+                                        monitoring =
+                                            true
+
+                                        liveVoiceAnalyzer
+                                            .start()
+
+                                        Log.d(
+                                            TAG,
+                                            "REMOTE AI MONITORING STARTED"
+                                        )
+                                    }
+                                }
+
+                                PeerConnection
+                                    .PeerConnectionState
+                                    .DISCONNECTED,
+
+                                PeerConnection
+                                    .PeerConnectionState
+                                    .FAILED,
+
+                                PeerConnection
+                                    .PeerConnectionState
+                                    .CLOSED -> {
+
+                                    callConnected =
+                                        false
+
+                                    monitoring =
+                                        false
+
+                                    remoteAudioAvailable =
+                                        false
+
+                                    liveVoiceAnalyzer
+                                        .stop()
+
+                                    liveRisk =
+                                        null
+
+                                    liveVerdict =
+                                        "WAITING"
+
+                                    livePrediction =
+                                        "WAITING"
+
+                                    analyzing =
+                                        false
+                                }
+
+                                else -> Unit
+                            }
+                        }
+
+                        override fun onIceConnectionStateChanged(
+                            state:
+                                PeerConnection.IceConnectionState
+                        ) {
+
+                            Log.d(
+                                TAG,
+                                "ICE STATE = $state"
+                            )
+                        }
+
+                        override fun onOfferCreated(
+                            offer:
+                                SessionDescription
+                        ) {
+
+                            val target =
+                                remotePeerId
+
+                            if (
+                                target.isNullOrBlank()
+                            ) {
+
+                                errorMessage =
+                                    "Remote device not found"
+
+                                Log.e(
+                                    TAG,
+                                    "Cannot send offer: remote peer unknown"
+                                )
+
+                                return
+                            }
+
+                            Log.d(
+                                TAG,
+                                "SENDING OFFER TO $target"
+                            )
+
+                            signalingClientHolder
+                                .value
+                                ?.sendOffer(
+
+                                    targetPeerId =
+                                        target,
+
+                                    sdp =
+                                        offer.description
+                                )
+                        }
+
+                        override fun onAnswerCreated(
+                            answer:
+                                SessionDescription
+                        ) {
+
+                            val target =
+                                remotePeerId
+
+                            if (
+                                target.isNullOrBlank()
+                            ) {
+
+                                errorMessage =
+                                    "Remote device not found"
+
+                                return
+                            }
+
+                            Log.d(
+                                TAG,
+                                "SENDING ANSWER TO $target"
+                            )
+
+                            signalingClientHolder
+                                .value
+                                ?.sendAnswer(
+
+                                    targetPeerId =
+                                        target,
+
+                                    sdp =
+                                        answer.description
+                                )
+                        }
+
+                        override fun onRemoteTrackReceived() {
+
+                            Log.d(
+                                TAG,
+                                "REMOTE AUDIO TRACK RECEIVED"
+                            )
+
+                            remoteAudioAvailable =
+                                true
+                        }
+
+                        override fun onError(
+                            error: String
+                        ) {
+
+                            Log.e(
+                                TAG,
+                                "WEBRTC ERROR: $error"
+                            )
+
+                            errorMessage =
+                                error
+                        }
+                    },
+
+                liveVoiceAnalyzer =
+                    liveVoiceAnalyzer
+            )
+        }
+
+    // =========================================================
+    // SIGNALING CLIENT
+    // =========================================================
+
+    val signalingClient =
+        remember {
+
+            SignalingClient(
+
+                serverUrl =
+                    "ws://192.168.21.210:8000",
+
+                roomId =
+                    roomId,
+
+                peerId =
+                    peerId,
+
+                listener =
+                    object :
+                        SignalingClient.Listener {
+
+                        override fun onConnected() {
+
+                            signalingConnected =
+                                true
+
+                            Log.d(
+                                TAG,
+                                "SIGNALING CONNECTED"
+                            )
+                        }
+
+                        override fun onMessage(
+                            message: JSONObject
+                        ) {
+
+                            Log.d(
+                                TAG,
+                                "SIGNALING MESSAGE = $message"
+                            )
+
+                            try {
+
+                                val type =
+                                    message.optString(
+                                        "type"
+                                    )
+
+                                /*
+                                 * Backend may use any of these
+                                 * names for the sender.
+                                 */
+                                val senderPeerId =
+                                    message
+                                        .optString(
+                                            "peer_id"
+                                        )
+                                        .ifBlank {
+                                            message.optString(
+                                                "from_peer_id"
+                                            )
+                                        }
+                                        .ifBlank {
+                                            message.optString(
+                                                "sender_peer_id"
+                                            )
+                                        }
+                                        .ifBlank {
+                                            message.optString(
+                                                "source_peer_id"
+                                            )
+                                        }
+
+                                when (type) {
+
+                                    // =================================
+                                    // PEER JOINED
+                                    // =================================
+
+                                    "peer_joined" -> {
+
+                                        if (
+                                            senderPeerId.isNotBlank() &&
+                                            senderPeerId != peerId
+                                        ) {
+
+                                            remotePeerId =
+                                                senderPeerId
+
+                                            Log.d(
+                                                TAG,
+                                                "REMOTE PEER JOINED = $senderPeerId"
+                                            )
+                                        }
+                                    }
+
+                                    // =================================
+                                    // OFFER
+                                    // =================================
+
+                                    "offer" -> {
+
+                                        if (
+                                            senderPeerId.isNotBlank()
+                                        ) {
+
+                                            remotePeerId =
+                                                senderPeerId
+                                        }
+
+                                        val sdp =
+                                            message.optString(
+                                                "sdp"
+                                            )
+
+                                        if (
+                                            sdp.isBlank()
+                                        ) {
+
+                                            errorMessage =
+                                                "Received empty offer"
+
+                                            return
+                                        }
+
+                                        /*
+                                         * RECEIVING an offer makes
+                                         * this device RECEIVER.
+                                         */
+                                        callRole =
+                                            RECEIVER
+
+                                        calling =
+                                            false
+
+                                        errorMessage =
+                                            null
+
+                                        Log.d(
+                                            TAG,
+                                            "INCOMING OFFER -> ROLE = RECEIVER"
+                                        )
+
+                                        webRTCManager
+                                            .initialize()
+
+                                        webRTCManager
+                                            .createPeerConnection()
+
+                                        val normalizedSdp =
+                                            normalizeSdp(
+                                                sdp
+                                            )
+
+                                        Log.d(
+                                            TAG,
+                                            "NORMALIZED OFFER LENGTH = ${normalizedSdp.length}"
+                                        )
+
+                                        val description =
+                                            SessionDescription(
+                                                SessionDescription.Type.OFFER,
+                                                normalizedSdp
+                                            )
+
+                                        webRTCManager
+                                            .setRemoteDescription(
+                                                description
+                                            )
+
+                                        /*
+                                         * WebRTCManager itself
+                                         * queues answer creation
+                                         * until remote SDP is ready.
+                                         */
+                                        webRTCManager
+                                            .createAnswer()
+                                    }
+
+                                    // =================================
+                                    // ANSWER
+                                    // =================================
+
+                                    "answer" -> {
+
+                                        if (
+                                            senderPeerId.isNotBlank()
+                                        ) {
+
+                                            remotePeerId =
+                                                senderPeerId
+                                        }
+
+                                        val sdp =
+                                            message.optString(
+                                                "sdp"
+                                            )
+
+                                        if (
+                                            sdp.isBlank()
+                                        ) {
+
+                                            errorMessage =
+                                                "Received empty answer"
+
+                                            return
+                                        }
+
+                                        Log.d(
+                                            TAG,
+                                            "INCOMING ANSWER"
+                                        )
+
+                                        val normalizedSdp =
+                                            normalizeSdp(
+                                                sdp
+                                            )
+
+                                        val description =
+                                            SessionDescription(
+                                                SessionDescription.Type.ANSWER,
+                                                normalizedSdp
+                                            )
+
+                                        webRTCManager
+                                            .setRemoteDescription(
+                                                description
+                                            )
+                                    }
+
+                                    // =================================
+                                    // ICE CANDIDATE
+                                    // =================================
+
+                                    "ice_candidate" -> {
+
+                                        if (
+                                            senderPeerId.isNotBlank() &&
+                                            senderPeerId != peerId
+                                        ) {
+
+                                            remotePeerId =
+                                                senderPeerId
+                                        }
+
+                                        val candidate =
+                                            message.optString(
+                                                "candidate"
+                                            )
+
+                                        if (
+                                            candidate.isBlank()
+                                        ) {
+
+                                            return
+                                        }
+
+                                        val sdpMid =
+                                            if (
+                                                message.has(
+                                                    "sdp_mid"
+                                                ) &&
+                                                !message.isNull(
+                                                    "sdp_mid"
+                                                )
+                                            ) {
+
+                                                message
+                                                    .optString(
+                                                        "sdp_mid"
+                                                    )
+                                                    .ifBlank {
+                                                        null
+                                                    }
+
+                                            } else {
+
+                                                null
+                                            }
+
+                                        val sdpMLineIndex =
+                                            message.optInt(
+                                                "sdp_m_line_index",
+                                                0
+                                            )
+
+                                        Log.d(
+                                            TAG,
+                                            "RECEIVED ICE CANDIDATE"
+                                        )
+
+                                        webRTCManager
+                                            .addIceCandidate(
+
+                                                IceCandidate(
+                                                    sdpMid,
+                                                    sdpMLineIndex,
+                                                    candidate
+                                                )
+                                            )
+                                    }
+
+                                    // =================================
+                                    // PEER LEFT
+                                    // =================================
+
+                                    "peer_left" -> {
+
+                                        Log.d(
+                                            TAG,
+                                            "REMOTE PEER LEFT"
+                                        )
+
+                                        callConnected =
+                                            false
+
+                                        calling =
+                                            false
+
+                                        monitoring =
+                                            false
+
+                                        remoteAudioAvailable =
+                                            false
+
+                                        liveVoiceAnalyzer
+                                            .stop()
+
+                                        liveRisk =
+                                            null
+
+                                        liveVerdict =
+                                            "WAITING"
+
+                                        livePrediction =
+                                            "WAITING"
+
+                                        analyzing =
+                                            false
+
+                                        remotePeerId =
+                                            null
+                                    }
+
+                                    // =================================
+                                    // CALL END
+                                    // =================================
+
+                                    "call_end" -> {
+
+                                        Log.d(
+                                            TAG,
+                                            "REMOTE CALL ENDED"
+                                        )
+
+                                        callConnected =
+                                            false
+
+                                        calling =
+                                            false
+
+                                        monitoring =
+                                            false
+
+                                        remoteAudioAvailable =
+                                            false
+
+                                        liveVoiceAnalyzer
+                                            .stop()
+
+                                        liveRisk =
+                                            null
+
+                                        liveVerdict =
+                                            "WAITING"
+
+                                        livePrediction =
+                                            "WAITING"
+
+                                        analyzing =
+                                            false
+                                    }
+                                }
+
+                            } catch (e: Exception) {
+
+                                Log.e(
+                                    TAG,
+                                    "SIGNALING MESSAGE ERROR",
+                                    e
+                                )
+
+                                errorMessage =
+                                    e.message
+                                        ?: "Signaling message error"
+                            }
+                        }
+
+                        override fun onDisconnected() {
+
+                            signalingConnected =
+                                false
+
+                            Log.d(
+                                TAG,
+                                "SIGNALING DISCONNECTED"
+                            )
+                        }
+
+                        override fun onError(
+                            error: String
+                        ) {
+
+                            Log.e(
+                                TAG,
+                                "SIGNALING ERROR: $error"
+                            )
+
+                            errorMessage =
+                                error
+                        }
+                    }
+            )
+        }
+
+    /*
+     * Put the actual signaling client into the holder
+     * used by WebRTC callbacks.
+     */
+    LaunchedEffect(
+        signalingClient
+    ) {
+
+        signalingClientHolder.value =
+            signalingClient
+
+        signalingClient.connect()
+    }
+
+    // =========================================================
+    // START OUTGOING CALL
+    // =========================================================
+
+    fun startCall() {
+
+        if (
+            calling ||
+            callConnected
+        ) {
+
+            return
+        }
+
+        if (
+            !signalingConnected
+        ) {
+
+            errorMessage =
+                "Signaling server is not connected"
+
+            return
+        }
+
+        /*
+         * Whoever presses START CALL becomes
+         * the CALLER.
+         */
+        callRole =
+            CALLER
+
+        calling =
+            true
+
+        errorMessage =
+            null
+
+        liveRisk =
+            null
+
+        liveVerdict =
+            "WAITING"
+
+        livePrediction =
+            "WAITING"
+
+        Log.d(
+            TAG,
+            "START CALL -> ROLE = CALLER"
+        )
+
+        /*
+         * If remote peer is already known,
+         * create offer immediately.
+         */
+        if (
+            !remotePeerId.isNullOrBlank()
+        ) {
+
+            webRTCManager
+                .initialize()
+
+            webRTCManager
+                .createPeerConnection()
+
+            webRTCManager
+                .createOffer()
+
+        } else {
+
+            Log.d(
+                TAG,
+                "REMOTE PEER NOT AVAILABLE YET"
+            )
+
+            Log.d(
+                TAG,
+                "WAITING FOR PEER JOIN"
+            )
+        }
+    }
+
+    // =========================================================
+    // CALLER WAITING FOR REMOTE PEER
+    // =========================================================
+
+    LaunchedEffect(
+        callRole,
+        remotePeerId,
+        calling
+    ) {
+
+        if (
+            callRole == CALLER &&
+            calling &&
+            !callConnected &&
+            !remotePeerId.isNullOrBlank()
+        ) {
+
+            Log.d(
+                TAG,
+                "REMOTE PEER NOW AVAILABLE"
+            )
+
+            webRTCManager
+                .initialize()
+
+            webRTCManager
+                .createPeerConnection()
+
+            webRTCManager
+                .createOffer()
+        }
+    }
+
+    // =========================================================
+    // STOP EVERYTHING
+    // =========================================================
+
+    fun stopEverything() {
+
+        Log.d(
+            TAG,
+            "STOPPING CALL"
+        )
+
+        liveVoiceAnalyzer
+            .stop()
+
+        webRTCManager
+            .close()
+
+        signalingClient
+            .disconnect()
+
+        callConnected =
+            false
+
+        calling =
+            false
+
+        monitoring =
+            false
+
+        remoteAudioAvailable =
+            false
+
+        liveRisk =
+            null
+
+        liveVerdict =
+            "WAITING"
+
+        livePrediction =
+            "WAITING"
+
+        analyzing =
+            false
+
+        callRole =
+            null
+
+        remotePeerId =
+            null
+
+        onBack()
+    }
+
+    // =========================================================
+    // CLEANUP
+    // =========================================================
+
+    DisposableEffect(Unit) {
+
+        onDispose {
+
+            liveVoiceAnalyzer
+                .stop()
+
+            webRTCManager
+                .close()
+
+            signalingClient
+                .disconnect()
+        }
+    }
+
+    // =========================================================
+    // UI
+    // =========================================================
+
+    Box(
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Color(0xFF0E0C11)
+                )
+    ) {
+
+        when (callRole) {
+
+            RECEIVER -> {
+
+                ReceiverSecurityPanel(
+
+                    connected =
+                        callConnected,
+
+                    calling =
+                        calling,
+
+                    monitoring =
+                        monitoring,
+
+                    remoteAudioAvailable =
+                        remoteAudioAvailable,
+
+                    liveRisk =
+                        liveRisk,
+
+                    liveVerdict =
+                        liveVerdict,
+
+                    livePrediction =
+                        livePrediction,
+
+                    analyzing =
+                        analyzing,
+
+                    muted =
+                        muted,
+
+                    speakerOn =
+                        speakerOn,
+
+                    errorMessage =
+                        errorMessage,
+
+                    onMute = {
+
+                        muted =
+                            !muted
+
+                        webRTCManager
+                            .setMicrophoneEnabled(
+                                !muted
+                            )
+                    },
+
+                    /*
+                     * WebRTCManager does not currently expose
+                     * a speaker-control method, so this only
+                     * updates the UI state.
+                     */
+                    onSpeaker = {
+
+                        speakerOn =
+                            !speakerOn
+                    },
+
+                    onEndCall = {
+                        stopEverything()
+                    }
+                )
+            }
+
+            else -> {
+
+                CallerCallPanel(
+
+                    connected =
+                        callConnected,
+
+                    calling =
+                        calling,
+
+                    signalingConnected =
+                        signalingConnected,
+
+                    muted =
+                        muted,
+
+                    speakerOn =
+                        speakerOn,
+
+                    errorMessage =
+                        errorMessage,
+
+                    onStartCall = {
+                        startCall()
+                    },
+
+                    onMute = {
+
+                        muted =
+                            !muted
+
+                        webRTCManager
+                            .setMicrophoneEnabled(
+                                !muted
+                            )
+                    },
+
+                    onSpeaker = {
+
+                        speakerOn =
+                            !speakerOn
+                    },
+
+                    onEndCall = {
+                        stopEverything()
+                    }
+                )
+            }
+        }
+    }
+}
+
+
+/* ============================================================
+ * SDP NORMALIZATION
+ * ============================================================
+ */
+
+private fun normalizeSdp(
+    raw: String
+): String {
+
+    var sdp =
+        raw.trim()
+
+    if (
+        sdp.startsWith("\"") &&
+        sdp.endsWith("\"") &&
+        sdp.length >= 2
+    ) {
+
+        sdp =
+            sdp.substring(
+                1,
+                sdp.length - 1
+            )
+    }
+
+    sdp =
+        sdp
+            .replace(
+                "\\r\\n",
+                "\n"
+            )
+            .replace(
+                "\\n",
+                "\n"
+            )
+            .replace(
+                "\\r",
+                "\n"
+            )
+            .replace(
+                "\r\n",
+                "\n"
+            )
+            .replace(
+                "\r",
+                "\n"
+            )
+
+    sdp =
+        sdp
+            .lines()
+            .joinToString("\r\n")
+
+    if (
+        !sdp.endsWith("\r\n")
+    ) {
+
+        sdp += "\r\n"
+    }
+
+    return sdp
+}
+
+
+/* ============================================================
+ * CALLER UI
+ * ============================================================
+ */
+
+@Composable
+private fun CallerCallPanel(
+    connected: Boolean,
+    calling: Boolean,
+    signalingConnected: Boolean,
+    muted: Boolean,
+    speakerOn: Boolean,
+    errorMessage: String?,
+    onStartCall: () -> Unit,
+    onMute: () -> Unit,
+    onSpeaker: () -> Unit,
+    onEndCall: () -> Unit
+) {
+
+    Column(
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+
+        horizontalAlignment =
+            Alignment.CenterHorizontally
+    ) {
+
+        Spacer(
+            modifier =
+                Modifier.height(35.dp)
+        )
+
+        Text(
+            text =
+                "SWARAKSHA",
+
+            color =
+                Color.White,
+
+            fontSize =
+                26.sp,
+
+            fontWeight =
+                FontWeight.Bold
+        )
+
+        Spacer(
+            modifier =
+                Modifier.height(8.dp)
+        )
+
+        Text(
+            text =
+                when {
+
+                    connected ->
+                        "CALL CONNECTED"
+
+                    calling ->
+                        "OUTGOING CALL"
+
+                    else ->
+                        "READY TO CALL"
+                },
+
+            color =
+                Color(0xFFBDB7C8),
+
+            fontSize =
+                14.sp,
+
+            fontWeight =
+                FontWeight.Medium
+        )
+
+        Spacer(
+            modifier =
+                Modifier.height(60.dp)
+        )
+
+        Box(
+            modifier =
+                Modifier
+                    .size(120.dp)
+                    .clip(CircleShape)
+                    .background(
+                        Color(0xFF211D27)
+                    ),
+
+            contentAlignment =
+                Alignment.Center
+        ) {
+
+            Icon(
+                imageVector =
+                    Icons.Default.Call,
+
+                contentDescription =
+                    null,
+
+                tint =
+                    Color(0xFFB69CFF),
+
+                modifier =
+                    Modifier.size(50.dp)
+            )
+        }
+
+        Spacer(
+            modifier =
+                Modifier.height(30.dp)
+        )
+
+        Text(
+            text =
+                when {
+
+                    connected ->
+                        "Secure voice connection established"
+
+                    calling ->
+                        "Calling remote device..."
+
+                    else ->
+                        "Start a protected voice call"
+                },
+
+            color =
+                Color.White,
+
+            fontSize =
+                17.sp,
+
+            textAlign =
+                TextAlign.Center
+        )
+
+        Spacer(
+            modifier =
+                Modifier.height(20.dp)
+        )
+
+        if (!signalingConnected) {
+
+            Text(
+                text =
+                    "Connecting to signaling server...",
+
+                color =
+                    Color(0xFF8F8997),
+
+                fontSize =
+                    12.sp
+            )
+        }
+
+        Spacer(
+            modifier =
+                Modifier.height(25.dp)
+        )
+
+        if (
+            !connected &&
+            !calling
+        ) {
+
+            Button(
+                onClick =
+                    onStartCall,
+
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .height(54.dp),
+
+                shape =
+                    RoundedCornerShape(14.dp),
+
+                colors =
+                    ButtonDefaults.buttonColors(
+                        containerColor =
+                            Color(0xFF7055D9)
+                    )
+            ) {
+
+                Icon(
+                    imageVector =
+                        Icons.Default.Call,
+
+                    contentDescription =
+                        null
+                )
+
+                Spacer(
+                    modifier =
+                        Modifier.width(8.dp)
+                )
+
+                Text(
+                    text =
+                        "START CALL",
+
+                    fontWeight =
+                        FontWeight.Bold
+                )
+            }
+        }
+
+        if (connected) {
+
+            Spacer(
+                modifier =
+                    Modifier.height(30.dp)
+            )
+
+            CallControls(
+                muted =
+                    muted,
+
+                speakerOn =
+                    speakerOn,
+
+                onMute =
+                    onMute,
+
+                onSpeaker =
+                    onSpeaker,
+
+                onEndCall =
+                    onEndCall
+            )
+        }
+
+        errorMessage?.let {
+
+            Spacer(
+                modifier =
+                    Modifier.height(30.dp)
+            )
+
+            Text(
+                text =
+                    it,
+
+                color =
+                    Color(0xFFFF7777),
+
+                fontSize =
+                    12.sp,
+
+                textAlign =
+                    TextAlign.Center
+            )
+        }
+    }
+}
+
+
+/* ============================================================
+ * RECEIVER SECURITY PANEL
+ * ============================================================
+ */
+
+@Composable
+private fun ReceiverSecurityPanel(
+    connected: Boolean,
+    calling: Boolean,
+    monitoring: Boolean,
+    remoteAudioAvailable: Boolean,
+    liveRisk: Double?,
+    liveVerdict: String,
+    livePrediction: String,
+    analyzing: Boolean,
+    muted: Boolean,
+    speakerOn: Boolean,
+    errorMessage: String?,
+    onMute: () -> Unit,
+    onSpeaker: () -> Unit,
+    onEndCall: () -> Unit
+) {
+
+    val currentRisk =
+        liveRisk?.coerceIn(
+            0.0,
+            100.0
+        )
+
+    val verdictColor =
+        when (liveVerdict) {
+
+            "AI SPOOF" ->
+                Color(0xFFFF5555)
+
+            "SUSPICIOUS" ->
+                Color(0xFFFFB347)
+
+            "REAL" ->
+                Color(0xFF59D98E)
+
+            else ->
+                Color(0xFF817A89)
+        }
+
+    Column(
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .padding(22.dp)
+    ) {
+
+        Spacer(
+            modifier =
+                Modifier.height(20.dp)
+        )
+
+        Text(
+            text =
+                "SWARAKSHA",
+
+            color =
+                Color.White,
+
+            fontSize =
+                26.sp,
+
+            fontWeight =
+                FontWeight.Bold
+        )
+
+        Spacer(
+            modifier =
+                Modifier.height(6.dp)
+        )
+
+        Text(
+            text =
+                "PROTECTED CALL",
+
+            color =
+                Color(0xFFB69CFF),
+
+            fontSize =
+                13.sp,
+
+            fontWeight =
+                FontWeight.Bold
+        )
+
+        Spacer(
+            modifier =
+                Modifier.height(25.dp)
+        )
+
+        SecurityStatusCard(
+
+            connected =
+                connected,
+
+            calling =
+                calling,
+
+            monitoring =
+                monitoring,
+
+            remoteAudioAvailable =
+                remoteAudioAvailable
+        )
+
+        Spacer(
+            modifier =
+                Modifier.height(20.dp)
+        )
+
+        Box(
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .clip(
+                        RoundedCornerShape(18.dp)
+                    )
+                    .background(
+                        Color(0xFF17141B)
+                    )
+                    .padding(20.dp)
+        ) {
+
+            Column {
+
+                Text(
+                    text =
+                        "REMOTE CALLER ANALYSIS",
+
+                    color =
+                        Color(0xFFAAA3B2),
+
+                    fontSize =
+                        12.sp,
+
+                    fontWeight =
+                        FontWeight.Bold
+                )
+
+                Spacer(
+                    modifier =
+                        Modifier.height(18.dp)
+                )
+
+                Row(
+                    modifier =
+                        Modifier.fillMaxWidth(),
+
+                    horizontalArrangement =
+                        Arrangement.SpaceBetween,
+
+                    verticalAlignment =
+                        Alignment.CenterVertically
+                ) {
+
+                    Column {
+
+                        Text(
+                            text =
+                                "AI SPOOF RISK",
+
+                            color =
+                                Color(0xFF817A89),
+
+                            fontSize =
+                                11.sp
+                        )
+
+                        Spacer(
+                            modifier =
+                                Modifier.height(5.dp)
+                        )
+
+                        Text(
+                            text =
+                                currentRisk?.let {
+                                    "${it.toInt()}%"
+                                } ?: "--",
+
+                            color =
+                                if (
+                                    currentRisk != null
+                                ) {
+
+                                    riskColor(
+                                        currentRisk
+                                    )
+
+                                } else {
+
+                                    Color(0xFF817A89)
+                                },
+
+                            fontSize =
+                                34.sp,
+
+                            fontWeight =
+                                FontWeight.Bold
+                        )
+                    }
+
+                    Column(
+                        horizontalAlignment =
+                            Alignment.End
+                    ) {
+
+                        Text(
+                            text =
+                                "VERDICT",
+
+                            color =
+                                Color(0xFF817A89),
+
+                            fontSize =
+                                11.sp
+                        )
+
+                        Spacer(
+                            modifier =
+                                Modifier.height(5.dp)
+                        )
+
+                        Text(
+                            text =
+                                liveVerdict,
+
+                            color =
+                                verdictColor,
+
+                            fontSize =
+                                16.sp,
+
+                            fontWeight =
+                                FontWeight.Bold
+                        )
+                    }
+                }
+
+                Spacer(
+                    modifier =
+                        Modifier.height(18.dp)
+                )
+
+                Box(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .height(7.dp)
+                            .clip(
+                                RoundedCornerShape(
+                                    10.dp
+                                )
+                            )
+                            .background(
+                                Color(0xFF27232E)
+                            )
+                ) {
+
+                    Box(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth(
+                                    (
+                                        (
+                                            currentRisk
+                                                ?: 0.0
+                                        ) /
+                                            100.0
+                                    ).toFloat()
+                                )
+                                .height(7.dp)
+                                .clip(
+                                    RoundedCornerShape(
+                                        10.dp
+                                    )
+                                )
+                                .background(
+
+                                    if (
+                                        currentRisk != null
+                                    ) {
+
+                                        riskColor(
+                                            currentRisk
+                                        )
+
+                                    } else {
+
+                                        Color(0xFF5E5964)
+                                    }
+                                )
+                    )
+                }
+
+                Spacer(
+                    modifier =
+                        Modifier.height(14.dp)
+                )
+
+                Text(
+                    text =
+                        when {
+
+                            !connected ->
+                                "Waiting for call connection..."
+
+                            !remoteAudioAvailable ->
+                                "REMOTE AUDIO OFFLINE"
+
+                            !monitoring ->
+                                "AI MONITORING WAITING"
+
+                            analyzing ->
+                                "AI ANALYZING LATEST AUDIO..."
+
+                            currentRisk == null ->
+                                "AI MONITORING ACTIVE — WAITING FOR RESULT"
+
+                            else ->
+                                "AI MONITORING ACTIVE"
+                        },
+
+                    color =
+                        Color(0xFF8F8997),
+
+                    fontSize =
+                        12.sp
+                )
+
+                if (
+                    currentRisk != null &&
+                    livePrediction.isNotBlank()
+                ) {
+
+                    Spacer(
+                        modifier =
+                            Modifier.height(8.dp)
+                    )
+
+                    Text(
+                        text =
+                            "MODEL: $livePrediction",
+
+                        color =
+                            Color(0xFF6F6977),
+
+                        fontSize =
+                            10.sp
+                    )
+                }
+            }
+        }
+
+        Spacer(
+            modifier =
+                Modifier.height(18.dp)
+        )
+
+        if (
+            currentRisk != null
+        ) {
+
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(
+                            RoundedCornerShape(16.dp)
+                        )
+                        .background(
+
+                            when {
+
+                                currentRisk >= 70.0 ->
+                                    Color(0xFF30181B)
+
+                                currentRisk >= 40.0 ->
+                                    Color(0xFF302719)
+
+                                else ->
+                                    Color(0xFF17271F)
+                            }
+                        )
+                        .padding(16.dp)
+            ) {
+
+                Text(
+                    text =
+                        when {
+
+                            currentRisk >= 70.0 ->
+                                "High-risk synthetic voice detected. Sensitive actions should be blocked or independently verified."
+
+                            currentRisk >= 40.0 ->
+                                "Suspicious voice characteristics detected. Additional verification is recommended."
+
+                            else ->
+                                "No significant synthetic-voice indicators detected in the latest analyzed window."
+                        },
+
+                    color =
+                        Color(0xFFD8D2DC),
+
+                    fontSize =
+                        12.sp,
+
+                    lineHeight =
+                        18.sp
+                )
+            }
+        }
+
+        errorMessage?.let {
+
+            Spacer(
+                modifier =
+                    Modifier.height(12.dp)
+            )
+
+            Text(
+                text =
+                    it,
+
+                color =
+                    Color(0xFFFF7777),
+
+                fontSize =
+                    11.sp,
+
+                textAlign =
+                    TextAlign.Center,
+
+                modifier =
+                    Modifier.fillMaxWidth()
+            )
+        }
+
+        Spacer(
+            modifier =
+                Modifier.weight(1f)
+        )
+
+        CallControls(
+
+            muted =
+                muted,
+
+            speakerOn =
+                speakerOn,
+
+            onMute =
+                onMute,
+
+            onSpeaker =
+                onSpeaker,
+
+            onEndCall =
+                onEndCall
+        )
+
+        Spacer(
+            modifier =
+                Modifier.height(10.dp)
+        )
+    }
+}
+
+
+/* ============================================================
+ * CALL CONTROLS
+ * ============================================================
+ */
+
+@Composable
+private fun CallControls(
+    muted: Boolean,
+    speakerOn: Boolean,
+    onMute: () -> Unit,
+    onSpeaker: () -> Unit,
+    onEndCall: () -> Unit
+) {
+
+    Row(
+        modifier =
+            Modifier.fillMaxWidth(),
+
+        horizontalArrangement =
+            Arrangement.Center,
+
+        verticalAlignment =
+            Alignment.CenterVertically
+    ) {
+
+        IconButton(
+            onClick =
+                onMute
+        ) {
+
+            Icon(
+                imageVector =
+                    if (muted)
+                        Icons.Default.MicOff
+                    else
+                        Icons.Default.Mic,
+
+                contentDescription =
+                    null,
+
+                tint =
+                    Color.White
+            )
+        }
+
+        Spacer(
+            modifier =
+                Modifier.width(30.dp)
+        )
+
+        IconButton(
+            onClick =
+                onSpeaker
+        ) {
+
+            Icon(
+                imageVector =
+                    if (speakerOn)
+                        Icons.Default.VolumeUp
+                    else
+                        Icons.Default.VolumeOff,
+
+                contentDescription =
+                    null,
+
+                tint =
+                    Color.White
+            )
+        }
+
+        Spacer(
+            modifier =
+                Modifier.width(30.dp)
+        )
+
+        IconButton(
+            onClick =
+                onEndCall
+        ) {
+
+            Icon(
+                imageVector =
+                    Icons.Default.CallEnd,
+
+                contentDescription =
+                    null,
+
+                tint =
+                    Color(0xFFFF6262),
+
+                modifier =
+                    Modifier.size(30.dp)
+            )
+        }
+    }
+}
+
+
+/* ============================================================
+ * SECURITY STATUS CARD
+ * ============================================================
+ */
+
+@Composable
+private fun SecurityStatusCard(
+    connected: Boolean,
+    calling: Boolean,
+    monitoring: Boolean,
+    remoteAudioAvailable: Boolean
+) {
+
+    Box(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clip(
+                    RoundedCornerShape(16.dp)
+                )
+                .background(
+                    Color(0xFF17141B)
+                )
+                .padding(16.dp)
+    ) {
+
+        Column {
+
+            Text(
+                text =
+                    "SECURITY STATUS",
+
+                color =
+                    Color(0xFFAAA3B2),
+
+                fontSize =
+                    12.sp,
+
+                fontWeight =
+                    FontWeight.Bold
+            )
+
+            Spacer(
+                modifier =
+                    Modifier.height(14.dp)
+            )
+
+            SecurityRow(
+
+                label =
+                    "CALL",
+
+                value =
+                    when {
+
+                        connected ->
+                            "CONNECTED"
+
+                        calling ->
+                            "CONNECTING"
+
+                        else ->
+                            "WAITING"
+                    },
+
+                active =
+                    connected
+            )
+
+            SecurityRow(
+
+                label =
+                    "REMOTE AUDIO",
+
+                value =
+                    if (
+                        remoteAudioAvailable
+                    ) {
+
+                        "AVAILABLE"
+
+                    } else {
+
+                        "OFFLINE"
+                    },
+
+                active =
+                    remoteAudioAvailable
+            )
+
+            SecurityRow(
+
+                label =
+                    "AI MONITORING",
+
+                value =
+                    if (
+                        monitoring
+                    ) {
+
+                        "ACTIVE"
+
+                    } else {
+
+                        "WAITING"
+                    },
+
+                active =
+                    monitoring
+            )
+        }
+    }
+}
+
+
+/* ============================================================
+ * SECURITY ROW
+ * ============================================================
+ */
+
+@Composable
+private fun SecurityRow(
+    label: String,
+    value: String,
+    active: Boolean
+) {
+
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(
+                    vertical = 6.dp
+                ),
+
+        horizontalArrangement =
+            Arrangement.SpaceBetween,
+
+        verticalAlignment =
+            Alignment.CenterVertically
+    ) {
+
+        Text(
+            text =
+                label,
+
+            color =
+                Color(0xFF817A89),
+
+            fontSize =
+                11.sp
+        )
+
+        Text(
+            text =
+                value,
+
+            color =
+                if (active)
+                    Color(0xFF59D98E)
+                else
+                    Color(0xFF817A89),
+
+            fontSize =
+                11.sp,
+
+            fontWeight =
+                FontWeight.Bold
+        )
+    }
+}
+
+
+/* ============================================================
+ * RISK COLOR
+ * ============================================================
+ */
+
+private fun riskColor(
+    risk: Double
+): Color {
+
+    return when {
+
+        risk >= 70.0 ->
+            Color(0xFFFF5555)
+
+        risk >= 40.0 ->
+            Color(0xFFFFB347)
+
+        else ->
+            Color(0xFF59D98E)
+    }
+}
