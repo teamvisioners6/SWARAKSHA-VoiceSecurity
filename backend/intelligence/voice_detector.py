@@ -1,5 +1,7 @@
 import os
 import warnings
+from pathlib import Path
+
 import numpy as np
 import librosa
 import onnxruntime as ort
@@ -7,7 +9,7 @@ import onnxruntime as ort
 
 class VoiceDetector:
     """
-    VIGILVOICE - Spectra-AASIST3 detector
+    SWARAKSHA - Spectra-AASIST3 detector
 
     Spectra-AASIST3:
         input  : wav [batch, 64600] float32
@@ -24,15 +26,43 @@ class VoiceDetector:
     TARGET_LENGTH = 64600
 
     def __init__(self):
+
+        # ---------------------------------------------------------
+        # MODEL PATH
+        # ---------------------------------------------------------
+        #
+        # Resolve the project root dynamically instead of using
+        # a hard-coded path such as C:\VIGILVOICE.
+        #
+        # voice_detector.py
+        #     backend/
+        #         intelligence/
+        #
+        # parents[0] = intelligence
+        # parents[1] = backend
+        # parents[2] = project root (C:\swaraksha)
+        #
+        project_root = Path(__file__).resolve().parents[2]
+
         self.model_path = (
-            r"C:\VIGILVOICE\models\spectra_aasist3"
-            r"\spectra-aasist3.onnx"
+            project_root
+            / "models"
+            / "spectra_aasist3"
+            / "spectra-aasist3.onnx"
         )
 
-        if not os.path.exists(self.model_path):
+        if not self.model_path.exists():
             raise FileNotFoundError(
-                f"Spectra-AASIST3 model not found:\n{self.model_path}"
+                "Spectra-AASIST3 model not found:\n"
+                f"{self.model_path}"
             )
+
+        # Convert to string for ONNX Runtime.
+        self.model_path = str(self.model_path)
+
+        # ---------------------------------------------------------
+        # ONNX RUNTIME
+        # ---------------------------------------------------------
 
         # Load NVIDIA CUDA/cuDNN DLLs when available.
         try:
@@ -51,7 +81,7 @@ class VoiceDetector:
             providers = ["CPUExecutionProvider"]
 
         print("\n========================================")
-        print(" VIGILVOICE - Spectra-AASIST3")
+        print(" SWARAKSHA - Spectra-AASIST3")
         print("========================================")
         print("Model:", self.model_path)
         print("Available providers:", available)
@@ -393,13 +423,6 @@ class VoiceDetector:
         )
 
         # Main score.
-        #
-        # Average is the strongest signal.
-        # Median prevents one abnormal segment
-        # from dominating.
-        #
-        # Strong segment ratio provides evidence
-        # when a substantial portion is spoofed.
         segment_score = (
             avg_spoof * 0.45
             + median_spoof * 0.30
@@ -408,8 +431,6 @@ class VoiceDetector:
         )
 
         # Final decision.
-        #
-        # We intentionally keep a three-level output.
         if segment_score >= 0.65:
             prediction = "SPOOF"
         elif segment_score >= 0.40:

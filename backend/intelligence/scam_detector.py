@@ -58,7 +58,25 @@ class ScamDetector:
 
     def analyze(self, text):
 
-        text = text.lower().strip()
+        # Accept both:
+        # 1. plain string
+        # 2. STT dictionary:
+        #    {"text": "...", "language": "...", ...}
+
+        if isinstance(text, dict):
+
+            text = text.get(
+                "text",
+                ""
+            )
+
+        if text is None:
+
+            text = ""
+
+        text = str(
+            text
+        ).lower().strip()
 
         detected = {}
         total_matches = 0

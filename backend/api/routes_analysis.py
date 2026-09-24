@@ -141,15 +141,54 @@ async def analyze_audio(
             f"{voice_result.get('prediction')}"
         )
 
+        # Spectra-AASIST3 returns spoof_probability
+# in the range 0.0 - 1.0.
+# Convert it to percentage for display.
+
+        ai_probability = float(
+            voice_result.get(
+                "ai_probability",
+                voice_result.get(
+                    "spoof_probability",
+                    0.0
+                )
+            )
+        )
+
+        real_probability = float(
+            voice_result.get(
+                "real_probability",
+                0.0
+            )
+        )
+
+        # Convert 0.0 - 1.0 → 0 - 100
+        # only for terminal/UI display.
+
+        if ai_probability <= 1.0:
+            ai_probability_display = (
+                ai_probability * 100.0
+            )
+        else:
+            ai_probability_display = ai_probability
+
+        if real_probability <= 1.0:
+            real_probability_display = (
+                real_probability * 100.0
+            )
+        else:
+            real_probability_display = real_probability
+
         print(
             f"AI Probability : "
-            f"{voice_result.get('ai_probability', 0):.2f}%"
+            f"{ai_probability_display:.2f}%"
         )
 
         print(
             f"Real Probability : "
-            f"{voice_result.get('real_probability', 0):.2f}%"
+            f"{real_probability_display:.2f}%"
         )
+       
 
         # ====================================================
         # 2. SPEAKER VERIFICATION
@@ -271,8 +310,23 @@ async def analyze_audio(
 
         try:
 
+            # STT can return either a plain string
+            # or a dictionary containing the transcript.
+            if isinstance(transcript, dict):
+
+                scam_text = transcript.get(
+                    "text",
+                    ""
+                )
+
+            else:
+
+                scam_text = str(
+                    transcript
+                )
+
             scam_result = scam_detector.analyze(
-                transcript
+                scam_text
             )
 
             print(
@@ -288,10 +342,12 @@ async def analyze_audio(
             )
 
             scam_result = {
-                "scam_probability": 0.0,
-                "prediction": "UNKNOWN"
+                "scam_risk_score": 0.0,
+                "verdict": "LOW RISK",
+                "detected_categories": {},
+                "total_matches": 0,
+                "text": ""
             }
-
         # ====================================================
         # 4. ACTION-AWARE SECURITY ENGINE
         # ====================================================

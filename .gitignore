@@ -74,3 +74,4 @@ custom_model/real_segments/
 models/vigilvoice_robust_cnn_v1.pth
 models/vigilvoice_robust_cnn_v1_last.pth
 models/voice_authenticity_model.pkl
+frontend/

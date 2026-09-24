@@ -1,5 +1,6 @@
 package com.vigilvoice.mobile.calling.ui
 
+import com.vigilvoice.mobile.SwarakshaWordmark
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -67,9 +69,6 @@ fun CallScreen(
 
     // =========================================================
     // SIGNALING HOLDER
-    //
-    // Declared BEFORE WebRTCManager because the WebRTC callbacks
-    // need to access the signaling client.
     // =========================================================
 
     val signalingClientHolder =
@@ -119,9 +118,6 @@ fun CallScreen(
 
     // =========================================================
     // AI STATE
-    //
-    // null = no analysis result yet
-    // value = latest analyzed risk
     // =========================================================
 
     var liveRisk by remember {
@@ -142,6 +138,24 @@ fun CallScreen(
 
     var errorMessage by remember {
         mutableStateOf<String?>(null)
+    }
+
+    /*
+     * =========================================================
+     * PERSISTENT AI SPOOF STATE
+     *
+     * Once a strong SPOOF result is detected during this call,
+     * do not allow a later weak REAL window to immediately hide
+     * the warning.
+     * =========================================================
+     */
+
+    var aiSpoofDetected by remember {
+        mutableStateOf(false)
+    }
+
+    var strongestRisk by remember {
+        mutableStateOf(0.0)
     }
 
     // =========================================================
@@ -184,34 +198,136 @@ fun CallScreen(
 
                             analyzing = false
 
-                            liveRisk =
+                            val normalizedPrediction =
+                                prediction
+                                    .trim()
+                                    .uppercase()
+
+                            val normalizedVerdict =
+                                verdict
+                                    .trim()
+                                    .uppercase()
+
+                            val currentRisk =
                                 riskScore.coerceIn(
                                     0.0,
                                     100.0
                                 )
 
-                            liveVerdict =
-                                when {
+                            /*
+                             * Keep track of the strongest
+                             * evidence seen during this call.
+                             */
 
-                                    riskScore >= 70.0 ->
-                                        "AI SPOOF"
+                            if (
+                                currentRisk >
+                                strongestRisk
+                            ) {
 
-                                    riskScore >= 40.0 ->
-                                        "SUSPICIOUS"
+                                strongestRisk =
+                                    currentRisk
+                            }
 
-                                    else ->
-                                        "REAL"
-                                }
+                            /*
+                             * A confirmed SPOOF result takes
+                             * priority over a weak later window.
+                             */
 
-                            livePrediction =
-                                prediction
+                            val spoofDetectedNow =
+                                normalizedPrediction == "SPOOF" ||
+                                normalizedPrediction == "AI SPOOF" ||
+                                normalizedVerdict == "HIGH RISK" ||
+                                currentRisk >= 70.0
+
+                            if (
+                                spoofDetectedNow
+                            ) {
+
+                                aiSpoofDetected =
+                                    true
+
+                                liveRisk =
+                                    maxOf(
+                                        currentRisk,
+                                        strongestRisk
+                                    )
+
+                                liveVerdict =
+                                    "AI SPOOF"
+
+                                livePrediction =
+                                    "SPOOF"
+
+                                Log.w(
+                                    TAG,
+                                    "========================================"
+                                )
+
+                                Log.w(
+                                    TAG,
+                                    "🚨 AI VOICE DETECTED"
+                                )
+
+                                Log.w(
+                                    TAG,
+                                    "Risk = $currentRisk"
+                                )
+
+                                Log.w(
+                                    TAG,
+                                    "Prediction = $normalizedPrediction"
+                                )
+
+                                Log.w(
+                                    TAG,
+                                    "Persistent SPOOF state = TRUE"
+                                )
+
+                                Log.w(
+                                    TAG,
+                                    "========================================"
+                                )
+
+                                return
+                            }
+
+                            /*
+                             * IMPORTANT:
+                             *
+                             * Once SPOOF has been confirmed,
+                             * do not overwrite the security
+                             * warning with a later weak REAL
+                             * result.
+                             */
+
+                            if (
+                                !aiSpoofDetected
+                            ) {
+
+                                liveRisk =
+                                    currentRisk
+
+                                liveVerdict =
+                                    when {
+
+                                        currentRisk >= 40.0 ->
+                                            "SUSPICIOUS"
+
+                                        else ->
+                                            "REAL"
+                                    }
+
+                                livePrediction =
+                                    normalizedPrediction
+                            }
 
                             Log.d(
                                 TAG,
-                                "LIVE RESULT: " +
-                                    "risk=$riskScore " +
-                                    "verdict=$verdict " +
-                                    "prediction=$prediction"
+                                "LIVE RESULT | " +
+                                    "risk=$currentRisk | " +
+                                    "verdict=$normalizedVerdict | " +
+                                    "prediction=$normalizedPrediction | " +
+                                    "spoofDetected=$aiSpoofDetected"
                             )
                         }
 
@@ -312,10 +428,6 @@ fun CallScreen(
                                         "CALL CONNECTED"
                                     )
 
-                                    /*
-                                     * ONLY RECEIVER monitors
-                                     * the remote caller.
-                                     */
                                     if (
                                         callRole ==
                                         RECEIVER
@@ -369,6 +481,12 @@ fun CallScreen(
 
                                     analyzing =
                                         false
+
+                                    aiSpoofDetected =
+                                        false
+
+                                    strongestRisk =
+                                        0.0
                                 }
 
                                 else -> Unit
@@ -540,10 +658,6 @@ fun CallScreen(
                                         "type"
                                     )
 
-                                /*
-                                 * Backend may use any of these
-                                 * names for the sender.
-                                 */
                                 val senderPeerId =
                                     message
                                         .optString(
@@ -567,10 +681,6 @@ fun CallScreen(
 
                                 when (type) {
 
-                                    // =================================
-                                    // PEER JOINED
-                                    // =================================
-
                                     "peer_joined" -> {
 
                                         if (
@@ -587,10 +697,6 @@ fun CallScreen(
                                             )
                                         }
                                     }
-
-                                    // =================================
-                                    // OFFER
-                                    // =================================
 
                                     "offer" -> {
 
@@ -617,10 +723,6 @@ fun CallScreen(
                                             return
                                         }
 
-                                        /*
-                                         * RECEIVING an offer makes
-                                         * this device RECEIVER.
-                                         */
                                         callRole =
                                             RECEIVER
 
@@ -646,11 +748,6 @@ fun CallScreen(
                                                 sdp
                                             )
 
-                                        Log.d(
-                                            TAG,
-                                            "NORMALIZED OFFER LENGTH = ${normalizedSdp.length}"
-                                        )
-
                                         val description =
                                             SessionDescription(
                                                 SessionDescription.Type.OFFER,
@@ -662,18 +759,9 @@ fun CallScreen(
                                                 description
                                             )
 
-                                        /*
-                                         * WebRTCManager itself
-                                         * queues answer creation
-                                         * until remote SDP is ready.
-                                         */
                                         webRTCManager
                                             .createAnswer()
                                     }
-
-                                    // =================================
-                                    // ANSWER
-                                    // =================================
 
                                     "answer" -> {
 
@@ -721,10 +809,6 @@ fun CallScreen(
                                                 description
                                             )
                                     }
-
-                                    // =================================
-                                    // ICE CANDIDATE
-                                    // =================================
 
                                     "ice_candidate" -> {
 
@@ -778,11 +862,6 @@ fun CallScreen(
                                                 0
                                             )
 
-                                        Log.d(
-                                            TAG,
-                                            "RECEIVED ICE CANDIDATE"
-                                        )
-
                                         webRTCManager
                                             .addIceCandidate(
 
@@ -793,10 +872,6 @@ fun CallScreen(
                                                 )
                                             )
                                     }
-
-                                    // =================================
-                                    // PEER LEFT
-                                    // =================================
 
                                     "peer_left" -> {
 
@@ -832,13 +907,15 @@ fun CallScreen(
                                         analyzing =
                                             false
 
+                                        aiSpoofDetected =
+                                            false
+
+                                        strongestRisk =
+                                            0.0
+
                                         remotePeerId =
                                             null
                                     }
-
-                                    // =================================
-                                    // CALL END
-                                    // =================================
 
                                     "call_end" -> {
 
@@ -873,10 +950,18 @@ fun CallScreen(
 
                                         analyzing =
                                             false
+
+                                        aiSpoofDetected =
+                                            false
+
+                                        strongestRisk =
+                                            0.0
                                     }
                                 }
 
-                            } catch (e: Exception) {
+                            } catch (
+                                e: Exception
+                            ) {
 
                                 Log.e(
                                     TAG,
@@ -917,10 +1002,10 @@ fun CallScreen(
             )
         }
 
-    /*
-     * Put the actual signaling client into the holder
-     * used by WebRTC callbacks.
-     */
+    // =========================================================
+    // CONNECT SIGNALING
+    // =========================================================
+
     LaunchedEffect(
         signalingClient
     ) {
@@ -955,10 +1040,6 @@ fun CallScreen(
             return
         }
 
-        /*
-         * Whoever presses START CALL becomes
-         * the CALLER.
-         */
         callRole =
             CALLER
 
@@ -977,15 +1058,17 @@ fun CallScreen(
         livePrediction =
             "WAITING"
 
+        aiSpoofDetected =
+            false
+
+        strongestRisk =
+            0.0
+
         Log.d(
             TAG,
             "START CALL -> ROLE = CALLER"
         )
 
-        /*
-         * If remote peer is already known,
-         * create offer immediately.
-         */
         if (
             !remotePeerId.isNullOrBlank()
         ) {
@@ -1090,6 +1173,12 @@ fun CallScreen(
         analyzing =
             false
 
+        aiSpoofDetected =
+            false
+
+        strongestRisk =
+            0.0
+
         callRole =
             null
 
@@ -1127,7 +1216,12 @@ fun CallScreen(
             Modifier
                 .fillMaxSize()
                 .background(
-                    Color(0xFF0E0C11)
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xFFF7FBFF),
+                            Color(0xFFF2FAF7)
+                        )
+                    )
                 )
     ) {
 
@@ -1181,11 +1275,6 @@ fun CallScreen(
                             )
                     },
 
-                    /*
-                     * WebRTCManager does not currently expose
-                     * a speaker-control method, so this only
-                     * updates the UI state.
-                     */
                     onSpeaker = {
 
                         speakerOn =
@@ -1193,6 +1282,7 @@ fun CallScreen(
                     },
 
                     onEndCall = {
+
                         stopEverything()
                     }
                 )
@@ -1221,6 +1311,7 @@ fun CallScreen(
                         errorMessage,
 
                     onStartCall = {
+
                         startCall()
                     },
 
@@ -1242,6 +1333,7 @@ fun CallScreen(
                     },
 
                     onEndCall = {
+
                         stopEverything()
                     }
                 )
@@ -1338,34 +1430,32 @@ private fun CallerCallPanel(
         modifier =
             Modifier
                 .fillMaxSize()
-                .padding(24.dp),
-
+                .padding(
+                    horizontal = 24.dp,
+                    vertical = 22.dp
+                ),
         horizontalAlignment =
             Alignment.CenterHorizontally
     ) {
 
         Spacer(
             modifier =
-                Modifier.height(35.dp)
+                Modifier.height(18.dp)
         )
 
         Text(
-            text =
-                "SWARAKSHA",
-
+            text = "SWARAKSHA",
             color =
-                Color.White,
-
+                Color(0xFF1459A6),
             fontSize =
-                26.sp,
-
+                30.sp,
             fontWeight =
                 FontWeight.Bold
         )
 
         Spacer(
             modifier =
-                Modifier.height(8.dp)
+                Modifier.height(6.dp)
         )
 
         Text(
@@ -1381,53 +1471,62 @@ private fun CallerCallPanel(
                     else ->
                         "READY TO CALL"
                 },
-
             color =
-                Color(0xFFBDB7C8),
-
+                Color(0xFF64748B),
             fontSize =
-                14.sp,
-
+                13.sp,
             fontWeight =
                 FontWeight.Medium
         )
 
         Spacer(
             modifier =
-                Modifier.height(60.dp)
+                Modifier.height(55.dp)
         )
 
         Box(
             modifier =
                 Modifier
-                    .size(120.dp)
+                    .size(142.dp)
                     .clip(CircleShape)
                     .background(
-                        Color(0xFF211D27)
+                        Color(0xFFE2F5EE)
                     ),
-
             contentAlignment =
                 Alignment.Center
         ) {
 
-            Icon(
-                imageVector =
-                    Icons.Default.Call,
-
-                contentDescription =
-                    null,
-
-                tint =
-                    Color(0xFFB69CFF),
-
+            Box(
                 modifier =
-                    Modifier.size(50.dp)
-            )
+                    Modifier
+                        .size(104.dp)
+                        .clip(CircleShape)
+                        .background(
+                            Color(0xFF16A978)
+                        ),
+                contentAlignment =
+                    Alignment.Center
+            ) {
+
+                Icon(
+                    imageVector =
+                        Icons.Default.Call,
+
+                    contentDescription =
+                        null,
+
+                    tint =
+                        Color.White,
+
+                    modifier =
+                        Modifier.size(48.dp)
+                )
+            }
         }
 
         Spacer(
             modifier =
-                Modifier.height(30.dp)
+                Modifier.height(28.dp)
         )
 
         Text(
@@ -1435,20 +1534,23 @@ private fun CallerCallPanel(
                 when {
 
                     connected ->
-                        "Secure voice connection established"
+                        "Protected voice call connected"
 
                     calling ->
-                        "Calling remote device..."
+                        "Connecting to the remote device..."
 
                     else ->
                         "Start a protected voice call"
                 },
 
             color =
-                Color.White,
+                Color(0xFF1459A6),
 
             fontSize =
-                17.sp,
+                20.sp,
+
+            fontWeight =
+                FontWeight.SemiBold,
 
             textAlign =
                 TextAlign.Center
@@ -1456,27 +1558,46 @@ private fun CallerCallPanel(
 
         Spacer(
             modifier =
-                Modifier.height(20.dp)
+                Modifier.height(10.dp)
+        )
+
+        Text(
+            text =
+                "Safer conversations with real-time voice security",
+
+            color =
+                Color(0xFF64748B),
+
+            fontSize =
+                12.sp,
+
+            textAlign =
+                TextAlign.Center
+        )
+
+        Spacer(
+            modifier =
+                Modifier.height(28.dp)
         )
 
         if (!signalingConnected) {
 
             Text(
                 text =
-                    "Connecting to signaling server...",
+                    "Connecting to secure call service...",
 
                 color =
-                    Color(0xFF8F8997),
+                    Color(0xFF64748B),
 
                 fontSize =
                     12.sp
             )
-        }
 
-        Spacer(
-            modifier =
-                Modifier.height(25.dp)
-        )
+            Spacer(
+                modifier =
+                    Modifier.height(18.dp)
+            )
+        }
 
         if (
             !connected &&
@@ -1490,16 +1611,17 @@ private fun CallerCallPanel(
                 modifier =
                     Modifier
                         .fillMaxWidth()
-                        .height(54.dp),
+                        .height(58.dp),
 
                 shape =
-                    RoundedCornerShape(14.dp),
+                    RoundedCornerShape(16.dp),
 
                 colors =
-                    ButtonDefaults.buttonColors(
-                        containerColor =
-                            Color(0xFF7055D9)
-                    )
+                    ButtonDefaults
+                        .buttonColors(
+                            containerColor =
+                                Color(0xFF1764B0)
+                        )
             ) {
 
                 Icon(
@@ -1512,12 +1634,15 @@ private fun CallerCallPanel(
 
                 Spacer(
                     modifier =
-                        Modifier.width(8.dp)
+                        Modifier.width(10.dp)
                 )
 
                 Text(
                     text =
                         "START CALL",
+
+                    fontSize =
+                        16.sp,
 
                     fontWeight =
                         FontWeight.Bold
@@ -1529,7 +1654,7 @@ private fun CallerCallPanel(
 
             Spacer(
                 modifier =
-                    Modifier.height(30.dp)
+                    Modifier.height(28.dp)
             )
 
             CallControls(
@@ -1550,11 +1675,52 @@ private fun CallerCallPanel(
             )
         }
 
+        Spacer(
+            modifier =
+                Modifier.weight(1f)
+        )
+
+        if (
+            !connected &&
+            !calling
+        ) {
+
+            Text(
+                text =
+                    "SWARAKSHA",
+
+                color =
+                    Color(0xFF16A978),
+
+                fontSize =
+                    12.sp,
+
+                fontWeight =
+                    FontWeight.Bold
+            )
+
+            Spacer(
+                modifier =
+                    Modifier.height(5.dp)
+            )
+
+            Text(
+                text =
+                    "Safer Conversations",
+
+                color =
+                    Color(0xFF64748B),
+
+                fontSize =
+                    12.sp
+            )
+        }
+
         errorMessage?.let {
 
             Spacer(
                 modifier =
-                    Modifier.height(30.dp)
+                    Modifier.height(18.dp)
             )
 
             Text(
@@ -1562,7 +1728,7 @@ private fun CallerCallPanel(
                     it,
 
                 color =
-                    Color(0xFFFF7777),
+                    Color(0xFFD93025),
 
                 fontSize =
                     12.sp,
@@ -1608,39 +1774,37 @@ private fun ReceiverSecurityPanel(
         when (liveVerdict) {
 
             "AI SPOOF" ->
-                Color(0xFFFF5555)
+                Color(0xFFD93025)
 
             "SUSPICIOUS" ->
-                Color(0xFFFFB347)
+                Color(0xFFE58A00)
 
             "REAL" ->
-                Color(0xFF59D98E)
+                Color(0xFF159A68)
 
             else ->
-                Color(0xFF817A89)
+                Color(0xFF64748B)
         }
 
     Column(
         modifier =
             Modifier
                 .fillMaxSize()
-                .padding(22.dp)
+                .padding(
+                    horizontal = 22.dp,
+                    vertical = 20.dp
+                )
     ) {
-
-        Spacer(
-            modifier =
-                Modifier.height(20.dp)
-        )
 
         Text(
             text =
                 "SWARAKSHA",
 
             color =
-                Color.White,
+                Color(0xFF1459A6),
 
             fontSize =
-                26.sp,
+                28.sp,
 
             fontWeight =
                 FontWeight.Bold
@@ -1648,7 +1812,7 @@ private fun ReceiverSecurityPanel(
 
         Spacer(
             modifier =
-                Modifier.height(6.dp)
+                Modifier.height(5.dp)
         )
 
         Text(
@@ -1656,10 +1820,10 @@ private fun ReceiverSecurityPanel(
                 "PROTECTED CALL",
 
             color =
-                Color(0xFFB69CFF),
+                Color(0xFF16A978),
 
             fontSize =
-                13.sp,
+                12.sp,
 
             fontWeight =
                 FontWeight.Bold
@@ -1667,11 +1831,10 @@ private fun ReceiverSecurityPanel(
 
         Spacer(
             modifier =
-                Modifier.height(25.dp)
+                Modifier.height(20.dp)
         )
 
         SecurityStatusCard(
-
             connected =
                 connected,
 
@@ -1687,7 +1850,7 @@ private fun ReceiverSecurityPanel(
 
         Spacer(
             modifier =
-                Modifier.height(20.dp)
+                Modifier.height(16.dp)
         )
 
         Box(
@@ -1695,10 +1858,10 @@ private fun ReceiverSecurityPanel(
                 Modifier
                     .fillMaxWidth()
                     .clip(
-                        RoundedCornerShape(18.dp)
+                        RoundedCornerShape(20.dp)
                     )
                     .background(
-                        Color(0xFF17141B)
+                        Color.White
                     )
                     .padding(20.dp)
         ) {
@@ -1707,10 +1870,10 @@ private fun ReceiverSecurityPanel(
 
                 Text(
                     text =
-                        "REMOTE CALLER ANALYSIS",
+                        "LIVE VOICE ANALYSIS",
 
                     color =
-                        Color(0xFFAAA3B2),
+                        Color(0xFF1459A6),
 
                     fontSize =
                         12.sp,
@@ -1742,7 +1905,7 @@ private fun ReceiverSecurityPanel(
                                 "AI SPOOF RISK",
 
                             color =
-                                Color(0xFF817A89),
+                                Color(0xFF64748B),
 
                             fontSize =
                                 11.sp
@@ -1757,7 +1920,8 @@ private fun ReceiverSecurityPanel(
                             text =
                                 currentRisk?.let {
                                     "${it.toInt()}%"
-                                } ?: "--",
+                                }
+                                    ?: "--",
 
                             color =
                                 if (
@@ -1770,7 +1934,7 @@ private fun ReceiverSecurityPanel(
 
                                 } else {
 
-                                    Color(0xFF817A89)
+                                    Color(0xFF64748B)
                                 },
 
                             fontSize =
@@ -1791,7 +1955,7 @@ private fun ReceiverSecurityPanel(
                                 "VERDICT",
 
                             color =
-                                Color(0xFF817A89),
+                                Color(0xFF64748B),
 
                             fontSize =
                                 11.sp
@@ -1834,7 +1998,7 @@ private fun ReceiverSecurityPanel(
                                 )
                             )
                             .background(
-                                Color(0xFF27232E)
+                                Color(0xFFE7EEF5)
                             )
                 ) {
 
@@ -1846,8 +2010,7 @@ private fun ReceiverSecurityPanel(
                                         (
                                             currentRisk
                                                 ?: 0.0
-                                        ) /
-                                            100.0
+                                        ) / 100.0
                                     ).toFloat()
                                 )
                                 .height(7.dp)
@@ -1857,7 +2020,6 @@ private fun ReceiverSecurityPanel(
                                     )
                                 )
                                 .background(
-
                                     if (
                                         currentRisk != null
                                     ) {
@@ -1868,7 +2030,7 @@ private fun ReceiverSecurityPanel(
 
                                     } else {
 
-                                        Color(0xFF5E5964)
+                                        Color(0xFFB8C4D1)
                                     }
                                 )
                     )
@@ -1878,6 +2040,94 @@ private fun ReceiverSecurityPanel(
                     modifier =
                         Modifier.height(14.dp)
                 )
+
+                /*
+                 * STRONG AI WARNING
+                 *
+                 * This is the visible alert that was
+                 * missing during your synthetic-voice test.
+                 */
+
+                if (
+                    liveVerdict == "AI SPOOF"
+                ) {
+
+                    Box(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(
+                                    RoundedCornerShape(
+                                        16.dp
+                                    )
+                                )
+                                .background(
+                                    Color(0xFFFFE9E7)
+                                )
+                                .padding(16.dp)
+                    ) {
+
+                        Column {
+
+                            Text(
+                                text =
+                                    "⚠ AI VOICE DETECTED",
+
+                                color =
+                                    Color(0xFFD93025),
+
+                                fontSize =
+                                    16.sp,
+
+                                fontWeight =
+                                    FontWeight.ExtraBold
+                            )
+
+                            Spacer(
+                                modifier =
+                                    Modifier.height(6.dp)
+                            )
+
+                            Text(
+                                text =
+                                    "The caller's voice shows strong synthetic-voice indicators.",
+
+                                color =
+                                    Color(0xFF7F1D1D),
+
+                                fontSize =
+                                    12.sp,
+
+                                lineHeight =
+                                    18.sp
+                            )
+
+                            Spacer(
+                                modifier =
+                                    Modifier.height(8.dp)
+                            )
+
+                            Text(
+                                text =
+                                    "SECURITY ACTION: BLOCK / VERIFY",
+
+                                color =
+                                    Color(0xFFD93025),
+
+                                fontSize =
+                                    11.sp,
+
+                                fontWeight =
+                                    FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    Spacer(
+                        modifier =
+                            Modifier.height(14.dp)
+                    )
+                }
 
                 Text(
                     text =
@@ -1898,15 +2148,41 @@ private fun ReceiverSecurityPanel(
                             currentRisk == null ->
                                 "AI MONITORING ACTIVE — WAITING FOR RESULT"
 
+                            liveVerdict == "AI SPOOF" ->
+                                "AI MONITORING ACTIVE — THREAT DETECTED"
+
                             else ->
                                 "AI MONITORING ACTIVE"
                         },
 
                     color =
-                        Color(0xFF8F8997),
+                        if (
+                            liveVerdict ==
+                            "AI SPOOF"
+                        ) {
+
+                            Color(0xFFD93025)
+
+                        } else {
+
+                            Color(0xFF64748B)
+                        },
 
                     fontSize =
-                        12.sp
+                        12.sp,
+
+                    fontWeight =
+                        if (
+                            liveVerdict ==
+                            "AI SPOOF"
+                        ) {
+
+                            FontWeight.Bold
+
+                        } else {
+
+                            FontWeight.Normal
+                        }
                 )
 
                 if (
@@ -1916,7 +2192,7 @@ private fun ReceiverSecurityPanel(
 
                     Spacer(
                         modifier =
-                            Modifier.height(8.dp)
+                            Modifier.height(7.dp)
                     )
 
                     Text(
@@ -1924,7 +2200,7 @@ private fun ReceiverSecurityPanel(
                             "MODEL: $livePrediction",
 
                         color =
-                            Color(0xFF6F6977),
+                            Color(0xFF94A3B8),
 
                         fontSize =
                             10.sp
@@ -1935,7 +2211,7 @@ private fun ReceiverSecurityPanel(
 
         Spacer(
             modifier =
-                Modifier.height(18.dp)
+                Modifier.height(14.dp)
         )
 
         if (
@@ -1947,41 +2223,50 @@ private fun ReceiverSecurityPanel(
                     Modifier
                         .fillMaxWidth()
                         .clip(
-                            RoundedCornerShape(16.dp)
+                            RoundedCornerShape(
+                                16.dp
+                            )
                         )
                         .background(
 
                             when {
 
-                                currentRisk >= 70.0 ->
-                                    Color(0xFF30181B)
+                                liveVerdict ==
+                                    "AI SPOOF" ->
+                                    Color(0xFFFFE9E7)
 
                                 currentRisk >= 40.0 ->
-                                    Color(0xFF302719)
+                                    Color(0xFFFFF5E3)
 
                                 else ->
-                                    Color(0xFF17271F)
+                                    Color(0xFFEAF8F1)
                             }
                         )
                         .padding(16.dp)
             ) {
 
                 Text(
+
                     text =
+
                         when {
 
-                            currentRisk >= 70.0 ->
+                            liveVerdict ==
+                                "AI SPOOF" ->
+
                                 "High-risk synthetic voice detected. Sensitive actions should be blocked or independently verified."
 
                             currentRisk >= 40.0 ->
+
                                 "Suspicious voice characteristics detected. Additional verification is recommended."
 
                             else ->
+
                                 "No significant synthetic-voice indicators detected in the latest analyzed window."
                         },
 
                     color =
-                        Color(0xFFD8D2DC),
+                        Color(0xFF475569),
 
                     fontSize =
                         12.sp,
@@ -1996,7 +2281,7 @@ private fun ReceiverSecurityPanel(
 
             Spacer(
                 modifier =
-                    Modifier.height(12.dp)
+                    Modifier.height(10.dp)
             )
 
             Text(
@@ -2004,7 +2289,7 @@ private fun ReceiverSecurityPanel(
                     it,
 
                 color =
-                    Color(0xFFFF7777),
+                    Color(0xFFD93025),
 
                 fontSize =
                     11.sp,
@@ -2042,7 +2327,7 @@ private fun ReceiverSecurityPanel(
 
         Spacer(
             modifier =
-                Modifier.height(10.dp)
+                Modifier.height(8.dp)
         )
     }
 }
@@ -2079,7 +2364,9 @@ private fun CallControls(
         ) {
 
             Icon(
+
                 imageVector =
+
                     if (muted)
                         Icons.Default.MicOff
                     else
@@ -2089,13 +2376,13 @@ private fun CallControls(
                     null,
 
                 tint =
-                    Color.White
+                    Color(0xFF1459A6)
             )
         }
 
         Spacer(
             modifier =
-                Modifier.width(30.dp)
+                Modifier.width(26.dp)
         )
 
         IconButton(
@@ -2104,7 +2391,9 @@ private fun CallControls(
         ) {
 
             Icon(
+
                 imageVector =
+
                     if (speakerOn)
                         Icons.Default.VolumeUp
                     else
@@ -2114,13 +2403,13 @@ private fun CallControls(
                     null,
 
                 tint =
-                    Color.White
+                    Color(0xFF1459A6)
             )
         }
 
         Spacer(
             modifier =
-                Modifier.width(30.dp)
+                Modifier.width(26.dp)
         )
 
         IconButton(
@@ -2128,19 +2417,34 @@ private fun CallControls(
                 onEndCall
         ) {
 
-            Icon(
-                imageVector =
-                    Icons.Default.CallEnd,
-
-                contentDescription =
-                    null,
-
-                tint =
-                    Color(0xFFFF6262),
-
+            Box(
                 modifier =
-                    Modifier.size(30.dp)
-            )
+                    Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(
+                            Color(0xFFE85B50)
+                        ),
+
+                contentAlignment =
+                    Alignment.Center
+            ) {
+
+                Icon(
+
+                    imageVector =
+                        Icons.Default.CallEnd,
+
+                    contentDescription =
+                        null,
+
+                    tint =
+                        Color.White,
+
+                    modifier =
+                        Modifier.size(25.dp)
+                )
+            }
         }
     }
 }
@@ -2160,14 +2464,17 @@ private fun SecurityStatusCard(
 ) {
 
     Box(
+
         modifier =
             Modifier
                 .fillMaxWidth()
                 .clip(
-                    RoundedCornerShape(16.dp)
+                    RoundedCornerShape(
+                        18.dp
+                    )
                 )
                 .background(
-                    Color(0xFF17141B)
+                    Color(0xFFEAF7F2)
                 )
                 .padding(16.dp)
     ) {
@@ -2175,11 +2482,12 @@ private fun SecurityStatusCard(
         Column {
 
             Text(
+
                 text =
                     "SECURITY STATUS",
 
                 color =
-                    Color(0xFFAAA3B2),
+                    Color(0xFF1459A6),
 
                 fontSize =
                     12.sp,
@@ -2190,7 +2498,7 @@ private fun SecurityStatusCard(
 
             Spacer(
                 modifier =
-                    Modifier.height(14.dp)
+                    Modifier.height(12.dp)
             )
 
             SecurityRow(
@@ -2199,6 +2507,7 @@ private fun SecurityStatusCard(
                     "CALL",
 
                 value =
+
                     when {
 
                         connected ->
@@ -2221,6 +2530,7 @@ private fun SecurityStatusCard(
                     "REMOTE AUDIO",
 
                 value =
+
                     if (
                         remoteAudioAvailable
                     ) {
@@ -2242,6 +2552,7 @@ private fun SecurityStatusCard(
                     "AI MONITORING",
 
                 value =
+
                     if (
                         monitoring
                     ) {
@@ -2274,6 +2585,7 @@ private fun SecurityRow(
 ) {
 
     Row(
+
         modifier =
             Modifier
                 .fillMaxWidth()
@@ -2289,25 +2601,32 @@ private fun SecurityRow(
     ) {
 
         Text(
+
             text =
                 label,
 
             color =
-                Color(0xFF817A89),
+                Color(0xFF64748B),
 
             fontSize =
                 11.sp
         )
 
         Text(
+
             text =
                 value,
 
             color =
-                if (active)
-                    Color(0xFF59D98E)
-                else
-                    Color(0xFF817A89),
+
+                if (active) {
+
+                    Color(0xFF159A68)
+
+                } else {
+
+                    Color(0xFF94A3B8)
+                },
 
             fontSize =
                 11.sp,
@@ -2331,12 +2650,12 @@ private fun riskColor(
     return when {
 
         risk >= 70.0 ->
-            Color(0xFFFF5555)
+            Color(0xFFD93025)
 
         risk >= 40.0 ->
-            Color(0xFFFFB347)
+            Color(0xFFE58A00)
 
         else ->
-            Color(0xFF59D98E)
+            Color(0xFF159A68)
     }
 }

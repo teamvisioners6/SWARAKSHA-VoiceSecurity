@@ -1,7 +1,7 @@
 package com.vigilvoice.mobile
 
 import com.vigilvoice.mobile.calling.ui.CallScreen
-
+import com.vigilvoice.mobile.SwarakshaWordmark
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -92,6 +92,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
+import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.sin
 
@@ -182,8 +183,20 @@ fun SwarakshaApp() {
 
             preferences.getString(
                 "peer_id",
-                ""
-            ) ?: ""
+                null
+            )
+                ?: UUID.randomUUID()
+                    .toString()
+                    .also { newId ->
+
+                        preferences
+                            .edit()
+                            .putString(
+                                "peer_id",
+                                newId
+                            )
+                            .apply()
+                    }
         )
     }
 
@@ -1478,74 +1491,27 @@ fun SwarakshaApp() {
 
     if (showCallScreen) {
 
-        if (peerId.isEmpty()) {
+        CallScreen(
 
-            DeviceRoleScreen(
+            roomId =
+                "demo-room",
 
-                onPhone1 = {
+            peerId =
+                peerId,
 
-                    preferences
-                        .edit()
-                        .putString(
-                            "peer_id",
-                            "phone1"
-                        )
-                        .apply()
+            onBack = {
 
-
-                    peerId =
-                        "phone1"
-                },
-
-
-                onPhone2 = {
-
-                    preferences
-                        .edit()
-                        .putString(
-                            "peer_id",
-                            "phone2"
-                        )
-                        .apply()
-
-
-                    peerId =
-                        "phone2"
-                },
-
-
-                onBack = {
-
-                    showCallScreen =
-                        false
-                }
-            )
-
-        } else {
-
-            CallScreen(
-
-                roomId =
-                    "demo-room",
-
-                peerId =
-                    peerId,
-
-                onBack = {
-
-                    showCallScreen =
-                        false
-                }
-            )
-        }
-
+                showCallScreen =
+                    false
+            }
+        )
 
         return
     }
 
 
     // ========================================================
-    // MAIN HOME UI
+    // CLEAN SWARAKSHA HOME UI
     // ========================================================
 
     Surface(
@@ -1562,483 +1528,106 @@ fun SwarakshaApp() {
             modifier =
                 Modifier
                     .fillMaxSize()
-                    .verticalScroll(
-                        rememberScrollState()
-                    )
                     .padding(
-                        horizontal = 18.dp,
-                        vertical = 14.dp
-                    )
+                        horizontal = 24.dp,
+                        vertical = 28.dp
+                    ),
+
+            horizontalAlignment =
+                Alignment.CenterHorizontally,
+
+            verticalArrangement =
+                Arrangement.Center
         ) {
 
-            HeaderSection()
-
-
-            Spacer(
-                modifier =
-                    Modifier.height(18.dp)
+            SwarakshaWordmark(
+                fontSize = 38.sp
             )
 
+            Spacer(
+                modifier = Modifier.height(42.dp)
+            )
 
-            // =================================================
-            // SECURE CALL
-            // =================================================
-
-            Button(
-
-                onClick = {
-
-                    showCallScreen =
-                        true
-                },
-
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-
-                shape =
-                    RoundedCornerShape(16.dp),
-
-                colors =
-                    ButtonDefaults.buttonColors(
-                        containerColor =
-                            NavyBlue
-                    )
+            Box(
+                modifier = Modifier
+                    .size(118.dp)
+                    .clip(CircleShape)
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                Green,
+                                NavyBlue
+                            )
+                        )
+                    ),
+                contentAlignment = Alignment.Center
             ) {
 
                 Text(
-                    "OPEN SWARAKSHA CALL",
-
-                    fontWeight =
-                        FontWeight.ExtraBold
+                    text = "☎",
+                    fontSize = 52.sp,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
                 )
             }
 
+            Spacer(
+                modifier = Modifier.height(28.dp)
+            )
+
+            Text(
+                text = "Start a protected voice call",
+                fontSize = 22.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = TextDark,
+                textAlign = TextAlign.Center
+            )
 
             Spacer(
-                modifier =
-                    Modifier.height(14.dp)
+                modifier = Modifier.height(10.dp)
             )
 
-
-            // =================================================
-            // DEVICE ROLE INFO
-            // =================================================
-
-            if (peerId.isNotEmpty()) {
-
-                Card(
-
-                    modifier =
-                        Modifier.fillMaxWidth(),
-
-                    shape =
-                        RoundedCornerShape(16.dp),
-
-                    colors =
-                        CardDefaults.cardColors(
-                            containerColor =
-                                LightBlue
-                        )
-                ) {
-
-                    Row(
-
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp),
-
-                        verticalAlignment =
-                            Alignment.CenterVertically,
-
-                        horizontalArrangement =
-                            Arrangement.SpaceBetween
-                    ) {
-
-                        Column {
-
-                            Text(
-                                "CALL DEVICE",
-
-                                fontSize =
-                                    10.sp,
-
-                                fontWeight =
-                                    FontWeight.Bold,
-
-                                color =
-                                    TextGrey
-                            )
-
-                            Text(
-                                peerId.uppercase(),
-
-                                fontSize =
-                                    16.sp,
-
-                                fontWeight =
-                                    FontWeight.ExtraBold,
-
-                                color =
-                                    NavyBlue
-                            )
-                        }
-
-
-                        OutlinedButton(
-
-                            onClick = {
-
-                                preferences
-                                    .edit()
-                                    .remove(
-                                        "peer_id"
-                                    )
-                                    .apply()
-
-
-                                peerId =
-                                    ""
-                            }
-                        ) {
-
-                            Text(
-                                "CHANGE"
-                            )
-                        }
-                    }
-                }
-
-
-                Spacer(
-                    modifier =
-                        Modifier.height(14.dp)
-                )
-            }
-
-
-            ReadyCard(
-                statusMessage =
-                    statusMessage
+            Text(
+                text = "Real-time voice security during your call",
+                fontSize = 13.sp,
+                color = TextGrey,
+                textAlign = TextAlign.Center
             )
-
 
             Spacer(
-                modifier =
-                    Modifier.height(14.dp)
+                modifier = Modifier.height(30.dp)
             )
 
-
-            WaveformCard(
-
-                isRecording =
-                    isRecording,
-
-                amplitude =
-                    amplitude
-            )
-
-
-            Spacer(
-                modifier =
-                    Modifier.height(14.dp)
-            )
-
-
-            LiveProtectionButtons(
-
-                onStart = {
-                    startLiveProtection()
+            Button(
+                onClick = {
+                    showCallScreen = true
                 },
-
-                onStop = {
-                    stopLiveProtection()
-                }
-            )
-
-
-            Spacer(
-                modifier =
-                    Modifier.height(14.dp)
-            )
-
-
-            ActionCard(
-
-                title =
-                    if (isRecording)
-                        "STOP VOICE RECORDING"
-                    else
-                        "START VOICE RECORDING",
-
-                subtitle =
-                    if (isRecording)
-                        "Recording ${formatTime(recordingTime)}"
-                    else
-                        "Tap to record your voice",
-
-                iconText =
-                    if (isRecording)
-                        "■"
-                    else
-                        "●",
-
-                background =
-                    LightGreen,
-
-                borderColor =
-                    Green,
-
-                iconBackground =
-                    Green,
-
-                titleColor =
-                    DarkGreen,
-
-                onClick = {
-
-                    if (isRecording) {
-
-                        stopRecording()
-
-                    } else {
-
-                        startRecording()
-                    }
-                }
-            )
-
-
-            Spacer(
-                modifier =
-                    Modifier.height(12.dp)
-            )
-
-
-            ActionCard(
-
-                title =
-                    "UPLOAD VOICE RECORDING",
-
-                subtitle =
-                    if (
-                        selectedFileName.isNotEmpty()
-                    ) {
-
-                        selectedFileName
-
-                    } else {
-
-                        "Choose an audio file from your device"
-                    },
-
-                iconText =
-                    "↑",
-
-                background =
-                    LightBlue,
-
-                borderColor =
-                    BrightBlue,
-
-                iconBackground =
-                    BrightBlue,
-
-                titleColor =
-                    NavyBlue,
-
-                onClick = {
-
-                    filePickerLauncher.launch(
-                        "audio/*"
-                    )
-                }
-            )
-
-
-            Spacer(
-                modifier =
-                    Modifier.height(12.dp)
-            )
-
-
-            ActionCard(
-
-                title =
-                    "ANALYZE WITH AI",
-
-                subtitle =
-                    "Detect deepfake, spoofed and scam voices",
-
-                iconText =
-                    "⌕",
-
-                background =
-                    LightOrange,
-
-                borderColor =
-                    Orange,
-
-                iconBackground =
-                    Orange,
-
-                titleColor =
-                    DarkOrange,
-
-                enabled =
-                    !isAnalyzing,
-
-                onClick = {
-
-                    analyzeVoice()
-                }
-            )
-
-
-            Spacer(
-                modifier =
-                    Modifier.height(14.dp)
-            )
-
-
-            AnimatedVisibility(
-                visible =
-                    isAnalyzing
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(58.dp),
+                shape = RoundedCornerShape(18.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = BrightBlue
+                )
             ) {
 
-                AnalyzingCard()
+                Text(
+                    text = "START CALL",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 0.8.sp
+                )
             }
-
-
-            AnimatedVisibility(
-                visible =
-                    verdict.isNotEmpty()
-            ) {
-
-                Column {
-
-                    Spacer(
-                        modifier =
-                            Modifier.height(4.dp)
-                    )
-
-
-                    ResultCard(
-
-                        verdict =
-                            verdict,
-
-                        riskScore =
-                            riskScore,
-
-                        aiProbability =
-                            aiProbability,
-
-                        realProbability =
-                            realProbability,
-
-                        scamRisk =
-                            scamRisk,
-
-                        modelName =
-                            modelName,
-
-                        transcript =
-                            transcript,
-
-                        durationSeconds =
-                            durationSeconds,
-
-                        segmentCount =
-                            segmentCount,
-
-                        reasons =
-                            reasons,
-
-                        scamVerdict =
-                            scamVerdict,
-
-                        securityDecision =
-                            securityDecision,
-
-                        securityActionType =
-                            securityActionType,
-
-                        securityRecommendation =
-                            securityRecommendation,
-
-                        speakerVerdict =
-                            speakerVerdict,
-
-                        speakerSimilarity =
-                            speakerSimilarity,
-
-                        impersonationStatus =
-                            impersonationStatus
-                    )
-
-
-                    Spacer(
-                        modifier =
-                            Modifier.height(18.dp)
-                    )
-
-
-                    OutlinedButton(
-
-                        onClick = {
-
-                            clearResults()
-
-                            recordedFile =
-                                null
-
-                            selectedFileName =
-                                ""
-                        },
-
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .height(52.dp),
-
-                        shape =
-                            RoundedCornerShape(16.dp)
-                    ) {
-
-                        Text(
-                            "×",
-
-                            fontSize =
-                                22.sp,
-
-                            fontWeight =
-                                FontWeight.Bold
-                        )
-
-
-                        Spacer(
-                            modifier =
-                                Modifier.width(8.dp)
-                        )
-
-
-                        Text(
-                            "CLEAR RESULTS",
-
-                            fontWeight =
-                                FontWeight.Bold
-                        )
-                    }
-                }
-            }
-
 
             Spacer(
-                modifier =
-                    Modifier.height(20.dp)
+                modifier = Modifier.height(22.dp)
+            )
+
+            Text(
+                text = "Safer Conversations",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Green
             )
         }
     }
